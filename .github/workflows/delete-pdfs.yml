@@ -1,0 +1,46 @@
+name: Knowledge Chest — delete all PDFs
+
+# One-click cleanup: removes every .pdf from the repo and commits.
+# Your catalog is untouched — data/knowledge_chest.db, docs/index.html, and
+# docs/knowledge_chest.xlsx all remain. Run from: Actions -> this workflow -> Run.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: knowledge-chest-apply     # shares the lock with the apply workflow
+  cancel-in-progress: false
+
+jobs:
+  delete-pdfs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove all PDFs (race-safe)
+        run: |
+          set -e
+          git config user.name  "knowledge-chest-bot"
+          git config user.email "actions@github.com"
+          BR="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "$BR"
+            git reset --hard "origin/$BR"
+            git rm --quiet --ignore-unmatch -- '*.pdf'
+            if git diff --cached --quiet; then
+              echo "No PDFs to remove."; exit 0
+            fi
+            n=$(git diff --cached --name-only | wc -l)
+            git commit -m "Delete all PDFs ($n removed); catalog preserved"
+            if git push origin "HEAD:$BR"; then
+              echo "Removed $n PDFs on attempt $attempt."; exit 0
+            fi
+            echo "Push rejected; syncing and retrying..."
+            sleep $(( (RANDOM % 5) + 2 ))
+          done
+          echo "Still failing after retries."; exit 1
