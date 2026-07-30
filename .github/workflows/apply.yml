@@ -1,19 +1,23 @@
+ly · YML
 name: Knowledge Chest — apply batch
-
+ 
 # Runs ONLY when you click it: Actions tab -> this workflow -> "Run workflow".
-# It replays the catalog baked into kc_apply.py: renames the PDFs, rebuilds the
-# dashboard/spreadsheet, and commits everything back. No API key, no model.
-
+# Replays the catalog baked into kc_apply.py: renames PDFs, rebuilds the
+# dashboard/spreadsheet, commits back. No API key, no model.
+# Race-safe: it always syncs to the newest main before pushing and retries,
+# so a "non-fast-forward" rejection can't happen. Re-running is always safe
+# (papers already catalogued are skipped by content hash).
+ 
 on:
   workflow_dispatch: {}
-
+ 
 permissions:
   contents: write
-
+ 
 concurrency:
   group: knowledge-chest-apply
   cancel-in-progress: false
-
+ 
 jobs:
   apply:
     runs-on: ubuntu-latest
@@ -21,26 +25,34 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
+ 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
+ 
       - name: Install deps
         run: pip install --quiet openpyxl pymupdf
-
-      - name: Apply the catalogued batch
+ 
+      - name: Apply, commit & push (race-safe)
         run: |
+          set -e
           git config user.name  "knowledge-chest-bot"
           git config user.email "actions@github.com"
-          python kc_apply.py
-
-      - name: Commit & push
-        run: |
-          if git diff --cached --quiet && git diff --quiet; then
-            echo "Nothing to commit."
-          else
+          BR="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3 4 5; do
+            echo "== attempt $attempt =="
+            git fetch origin "$BR"
+            git reset --hard "origin/$BR"        # always start from newest main
+            python kc_apply.py                    # idempotent: only adds new papers
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "Nothing new to apply."; exit 0
+            fi
             git add -A
             git commit -m "Apply catalog batch (rename + refresh dashboard)"
-            git push
-          fi
+            if git push origin "HEAD:$BR"; then
+              echo "Pushed on attempt $attempt."; exit 0
+            fi
+            echo "Push rejected (someone pushed first); syncing and retrying..."
+            sleep $(( (RANDOM % 5) + 2 ))
+          done
+          echo "Still failing after retries."; exit 1
