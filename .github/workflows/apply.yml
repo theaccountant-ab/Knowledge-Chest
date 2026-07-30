@@ -1,0 +1,46 @@
+name: Knowledge Chest — apply batch
+
+# Runs ONLY when you click it: Actions tab -> this workflow -> "Run workflow".
+# It replays the catalog baked into kc_apply.py: renames the PDFs, rebuilds the
+# dashboard/spreadsheet, and commits everything back. No API key, no model.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: knowledge-chest-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install --quiet openpyxl pymupdf
+
+      - name: Apply the catalogued batch
+        run: |
+          git config user.name  "knowledge-chest-bot"
+          git config user.email "actions@github.com"
+          python kc_apply.py
+
+      - name: Commit & push
+        run: |
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "Nothing to commit."
+          else
+            git add -A
+            git commit -m "Apply catalog batch (rename + refresh dashboard)"
+            git push
+          fi
