@@ -1,0 +1,47 @@
+name: Knowledge Chest — promote to published
+
+# One-click: updates working-paper entries to their published journal (matched
+# by title + authors), relabels the PDF if present, and rebuilds the dashboard.
+# Claude fills in kc_promote.py first; then upload it and run this workflow.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: knowledge-chest-apply
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install --quiet openpyxl pymupdf
+      - name: Promote & push (race-safe)
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BR="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "$BR"
+            git reset --hard "origin/$BR"
+            python kc_promote.py
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "Nothing to promote."; exit 0
+            fi
+            git add -A
+            git commit -m "Promote working paper(s) to published"
+            if git push origin "HEAD:$BR"; then echo "Pushed on attempt $attempt."; exit 0; fi
+            echo "Push rejected; syncing and retrying..."; sleep $(( (RANDOM % 5) + 2 ))
+          done
+          echo "Still failing after retries."; exit 1
